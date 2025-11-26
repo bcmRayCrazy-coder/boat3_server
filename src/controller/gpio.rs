@@ -1,6 +1,9 @@
 use crate::protocol::gpio::{GPIOMode, RemoteGPIO};
 use rppal::gpio::{self, Gpio};
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{LazyLock, RwLock},
+};
 
 pub enum GPIOError {
     ArgError,
@@ -15,7 +18,7 @@ impl std::fmt::Display for GPIOError {
             f,
             "{}",
             match self {
-                GPIOError::ArgError => "Argument Error",
+                GPIOError::ArgError => "Argument Error".to_owned(),
                 GPIOError::PinNotFound(pin) => format!("PinNotFound: No pin {}.", pin.to_string()),
                 GPIOError::PinExists(pin) =>
                     format!("PinExists: Already exists pin {}.", pin.to_string()),
@@ -30,65 +33,82 @@ impl std::fmt::Display for GPIOError {
 }
 
 struct GPIOList {
-    input: HashMap<u32, gpio::InputPin>,
-    output: HashMap<u32, gpio::OutputPin>,
+    input: LazyLock<RwLock<HashMap<u32, gpio::InputPin>>>,
+    output: LazyLock<RwLock<HashMap<u32, gpio::OutputPin>>>,
 }
 
-static GPIO: Gpio = Gpio::new().unwrap();
+static GPIO: LazyLock<Gpio> = LazyLock::new(|| Gpio::new().unwrap());
+
 static GPIO_LIST: GPIOList = GPIOList {
-    input: HashMap::new(),
-    output: HashMap::new(),
+    input: LazyLock::new(|| RwLock::new(HashMap::<u32, gpio::InputPin>::new())),
+    output: LazyLock::new(|| RwLock::new(HashMap::<u32, gpio::OutputPin>::new())),
 };
 
-pub fn config(gpio: RemoteGPIO) -> Result<_, GPIOError> {
-    let pin = GPIO.get(gpio.pin);
+pub fn init_gpio_controller() {}
+
+pub fn config(gpio: RemoteGPIO) -> Result<(), GPIOError> {
+    let pin = GPIO.get(gpio.pin as u8);
     match pin {
         Err(_) => Err(GPIOError::PinNotFound(gpio.pin)),
         Ok(pin) => match gpio.mode {
             GPIOMode::UNKNOWN => Err(GPIOError::ArgError),
             GPIOMode::INPUT => {
-                if GPIO_LIST.input.contains_key(&gpio.pin) {
+                if GPIO_LIST.input.read().unwrap().contains_key(&gpio.pin) {
                     return Err(GPIOError::PinExists(gpio.pin));
                 }
-                GPIO_LIST.input.insert(gpio.pin, pin.into_input());
+                GPIO_LIST
+                    .input
+                    .write()
+                    .unwrap()
+                    .insert(gpio.pin, pin.into_input());
                 Ok(())
             }
             GPIOMode::OUTPUT => {
-                if GPIO_LIST.output.contains_key(&gpio.pin) {
+                if GPIO_LIST.output.read().unwrap().contains_key(&gpio.pin) {
                     return Err(GPIOError::PinExists(gpio.pin));
                 }
-                GPIO_LIST.output.insert(gpio.pin, pin.into_output());
+                GPIO_LIST
+                    .output
+                    .write()
+                    .unwrap()
+                    .insert(gpio.pin, pin.into_output());
                 Ok(())
             }
         },
     }
 }
 
-pub fn set(gpio: RemoteGPIO) -> Result<_, GPIOError> {
+pub fn set(gpio: RemoteGPIO) -> Result<(), GPIOError> {
     if gpio.mode == GPIOMode::INPUT {
         return Err(GPIOError::PinUnmatch(gpio.pin, GPIOMode::OUTPUT));
     }
-    if let Some(pin) = GPIO_LIST.output.get(&gpio.pin) {
-        match gpio.value {
+    GPIO_LIST
+        .output
+        .write()
+        .unwrap()
+        .entry(gpio.pin)
+        .and_modify(|pin| match gpio.value {
             0 => pin.set_low(),
             _ => pin.set_high(),
-        }
-        return Ok(());
-    }
-    Err(GPIOError::PinNotFound(gpio.pin))
+        });
+
+    // Err(GPIOError::PinNotFound(gpio.pin))
+    Ok(())
 }
 
 pub fn read(gpio: RemoteGPIO) -> Result<u32, GPIOError> {
     if gpio.mode == GPIOMode::OUTPUT {
         return Err(GPIOError::PinUnmatch(gpio.pin, GPIOMode::INPUT));
     }
-    if let Some(pin) = GPIO_LIST.input.get(&gpio.pin) {
-        match gpio.value {
-            0 => pin.set_low(),
-            _ => pin.set_high(),
-        }
-        return Ok(pin.read());
+    if let Some(pin) = GPIO_LIST.input.write().unwrap().get(&gpio.pin) {
+        return Ok(match pin.read() {
+            gpio::Level::Low => 0,
+            gpio::Level::High => 1,
+        });
     }
     Err(GPIOError::PinNotFound(gpio.pin))
 }
-pub fn reset_all() {}
+pub fn reset_all() {
+    GPIO_LIST.input.write().unwrap().clear();
+    GPIO_LIST.output.write().unwrap().clear();
+}

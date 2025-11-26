@@ -5,7 +5,7 @@ use crate::{
     protocol::{gpio::RemoteGPIO, response::RemoteResponse},
 };
 
-pub async fn gpio_config(Json(body): Json<RemoteGPIO>) -> (StatusCode, Json<RemoteResponse<()>>) {
+pub async fn gpio_config(Json(body): Json<RemoteGPIO>) -> (StatusCode, Json<RemoteResponse<bool>>) {
     println!("Todo: Config pin {} mode {}", body.pin, body.mode);
     let result = controller::gpio::config(body);
     (
@@ -14,52 +14,51 @@ pub async fn gpio_config(Json(body): Json<RemoteGPIO>) -> (StatusCode, Json<Remo
             ok: Some(result.is_ok()),
             error: match result {
                 Ok(_) => None,
-                Err(err) => format!("{}", err),
+                Err(err) => Some(format!("{}", err)),
             },
-            data: None,
+            data: Some(true),
         }),
     )
 }
 
-pub async fn gpio_set(Json(body): Json<RemoteGPIO>) -> (StatusCode, Json<RemoteResponse<()>>) {
+pub async fn gpio_set(Json(body): Json<RemoteGPIO>) -> (StatusCode, Json<RemoteResponse<bool>>) {
     println!("Todo: Set pin {} to {}", body.pin, body.value.to_string());
-    let result = controller::gpio::set(body);
+    let result = controller::gpio::set(body.clone());
 
-    controller::gpio::set(body);
+    // controller::gpio::set(body);
     (
         StatusCode::OK,
         Json(RemoteResponse {
             ok: Some(result.is_ok()),
             error: match result {
                 Ok(_) => None,
-                Err(err) => format!("{}", err),
+                Err(err) => Some(format!("{}", err)),
             },
-            data: None,
+            data: Some(true),
         }),
     )
 }
 
 pub async fn gpio_read(
     Json(body): Json<RemoteGPIO>,
-) -> (StatusCode, Json<RemoteResponse<RemoteGPIO>>) {
+) -> (StatusCode, Json<RemoteResponse<u32>>) {
     println!("Todo: Read pin {}", body.pin);
     let result = controller::gpio::read(body);
 
-    controller::gpio::read(body);
     (
         StatusCode::OK,
         Json(RemoteResponse {
             ok: Some(result.is_ok()),
             error: match result {
                 Ok(_) => None,
-                Err(err) => format!("{}", err),
+                Err(ref err) => Some(format!("{}", err)),
             },
-            data: None,
+            data: result.ok(),
         }),
     )
 }
 
-pub async fn gpio_reset_all() -> (StatusCode, Json<RemoteResponse<()>>) {
+pub async fn gpio_reset_all() -> (StatusCode, Json<RemoteResponse<bool>>) {
     println!("Todo: Reset all gpio");
     controller::gpio::reset_all();
     (
@@ -67,7 +66,7 @@ pub async fn gpio_reset_all() -> (StatusCode, Json<RemoteResponse<()>>) {
         Json(RemoteResponse {
             ok: Some(true),
             error: None,
-            data: None,
+            data: Some(true),
         }),
     )
 }
