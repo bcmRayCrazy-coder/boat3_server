@@ -2,11 +2,11 @@ use axum::{Json, http::StatusCode};
 
 use crate::{
     controller,
-    protocol::{gpio::RemoteGPIO, response::RemoteResponse},
+    protocol::{gpio::{GPIOValue, RemoteGPIO}, response::RemoteResponse},
 };
 
 pub async fn gpio_config(Json(body): Json<RemoteGPIO>) -> (StatusCode, Json<RemoteResponse<bool>>) {
-    println!("Todo: Config pin {} mode {}", body.pin, body.mode);
+    println!("Config pin {} mode {}", body.pin, body.mode);
     let result = controller::gpio::config(body);
     (
         StatusCode::OK,
@@ -22,7 +22,7 @@ pub async fn gpio_config(Json(body): Json<RemoteGPIO>) -> (StatusCode, Json<Remo
 }
 
 pub async fn gpio_set(Json(body): Json<RemoteGPIO>) -> (StatusCode, Json<RemoteResponse<bool>>) {
-    println!("Todo: Set pin {} to {}", body.pin, body.value.to_string());
+    println!("Set pin {} to {}", body.pin, body.value.to_string());
     let result = controller::gpio::set(body.clone());
 
     // controller::gpio::set(body);
@@ -41,8 +41,8 @@ pub async fn gpio_set(Json(body): Json<RemoteGPIO>) -> (StatusCode, Json<RemoteR
 
 pub async fn gpio_read(
     Json(body): Json<RemoteGPIO>,
-) -> (StatusCode, Json<RemoteResponse<u32>>) {
-    println!("Todo: Read pin {}", body.pin);
+) -> (StatusCode, Json<RemoteResponse<GPIOValue>>) {
+    println!("TODO: Read pin {}", body.pin);
     let result = controller::gpio::read(body);
 
     (

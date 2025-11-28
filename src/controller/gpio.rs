@@ -1,4 +1,4 @@
-use crate::protocol::gpio::{GPIOMode, RemoteGPIO};
+use crate::protocol::gpio::{GPIOMode, GPIOValue, GPIOValueLevel, RemoteGPIO};
 use rppal::gpio::{self, Gpio};
 use std::{
     collections::HashMap,
@@ -7,9 +7,12 @@ use std::{
 
 pub enum GPIOError {
     ArgError,
-    PinNotFound(u32),
-    PinExists(u32),
-    PinUnmatch(u32, GPIOMode),
+    InternalError,
+    PinNotFound(u8),
+    PinExists(u8),
+    PinUnmatch(u8, GPIOMode),
+    PinUnreadable(u8),
+    PinUnwriteable(u8),
 }
 
 impl std::fmt::Display for GPIOError {
@@ -18,7 +21,8 @@ impl std::fmt::Display for GPIOError {
             f,
             "{}",
             match self {
-                GPIOError::ArgError => "Argument Error".to_owned(),
+                GPIOError::ArgError => "Argument Error.".to_owned(),
+                GPIOError::InternalError => "Internal Error.".to_owned(),
                 GPIOError::PinNotFound(pin) => format!("PinNotFound: No pin {}.", pin.to_string()),
                 GPIOError::PinExists(pin) =>
                     format!("PinExists: Already exists pin {}.", pin.to_string()),
@@ -27,21 +31,25 @@ impl std::fmt::Display for GPIOError {
                     pin.to_string(),
                     mode
                 ),
+                GPIOError::PinUnreadable(pin) =>
+                    format!("PinUnreadable: Pin {} is not readable.", pin.to_string()),
+                GPIOError::PinUnwriteable(pin) =>
+                    format!("PinUnwriteable: Pin {} is not writeable.", pin.to_string()),
             }
         )
     }
 }
 
 struct GPIOList {
-    input: LazyLock<RwLock<HashMap<u32, gpio::InputPin>>>,
-    output: LazyLock<RwLock<HashMap<u32, gpio::OutputPin>>>,
+    input: LazyLock<RwLock<HashMap<u8, gpio::InputPin>>>,
+    output: LazyLock<RwLock<HashMap<u8, gpio::OutputPin>>>,
 }
 
 static GPIO: LazyLock<Gpio> = LazyLock::new(|| Gpio::new().unwrap());
 
 static GPIO_LIST: GPIOList = GPIOList {
-    input: LazyLock::new(|| RwLock::new(HashMap::<u32, gpio::InputPin>::new())),
-    output: LazyLock::new(|| RwLock::new(HashMap::<u32, gpio::OutputPin>::new())),
+    input: LazyLock::new(|| RwLock::new(HashMap::<u8, gpio::InputPin>::new())),
+    output: LazyLock::new(|| RwLock::new(HashMap::<u8, gpio::OutputPin>::new())),
 };
 
 pub fn init_gpio_controller() {}
@@ -53,58 +61,83 @@ pub fn config(gpio: RemoteGPIO) -> Result<(), GPIOError> {
         Ok(pin) => match gpio.mode {
             GPIOMode::UNKNOWN => Err(GPIOError::ArgError),
             GPIOMode::INPUT => {
-                if GPIO_LIST.input.read().unwrap().contains_key(&gpio.pin) {
-                    return Err(GPIOError::PinExists(gpio.pin));
+                if let Ok(mut list) = GPIO_LIST.input.write() {
+                    if list.contains_key(&gpio.pin) {
+                        return Err(GPIOError::PinExists(gpio.pin));
+                    }
+                    list.insert(gpio.pin, pin.into_input_pulldown());
                 }
-                GPIO_LIST
-                    .input
-                    .write()
-                    .unwrap()
-                    .insert(gpio.pin, pin.into_input());
                 Ok(())
             }
             GPIOMode::OUTPUT => {
-                if GPIO_LIST.output.read().unwrap().contains_key(&gpio.pin) {
-                    return Err(GPIOError::PinExists(gpio.pin));
+                if let Ok(mut list) = GPIO_LIST.output.write() {
+                    if list.contains_key(&gpio.pin) {
+                        return Err(GPIOError::PinExists(gpio.pin));
+                    }
+                    list.insert(gpio.pin, pin.into_output());
                 }
-                GPIO_LIST
-                    .output
-                    .write()
-                    .unwrap()
-                    .insert(gpio.pin, pin.into_output());
                 Ok(())
             }
+            // TODO: Analog and pwm support
+            GPIOMode::ANALOG => Ok(()),
+            GPIOMode::PWM => Ok(()),
         },
     }
 }
 
 pub fn set(gpio: RemoteGPIO) -> Result<(), GPIOError> {
-    if gpio.mode == GPIOMode::INPUT {
-        return Err(GPIOError::PinUnmatch(gpio.pin, GPIOMode::OUTPUT));
+    match gpio.mode {
+        GPIOMode::UNKNOWN | GPIOMode::INPUT => return Err(GPIOError::PinUnwriteable(gpio.pin)),
+        GPIOMode::OUTPUT => {
+            if let Ok(mut list) = GPIO_LIST.output.write() {
+                if let Some(pin) = list.get_mut(&gpio.pin) {
+                    match gpio.value {
+                        GPIOValue::NONE | GPIOValue::ANALOG(_) | GPIOValue::PWM(_, _) => {
+                            return Err(GPIOError::ArgError);
+                        }
+                        GPIOValue::LEVEL(level) => match level {
+                            GPIOValueLevel::LOW => pin.set_low(),
+                            GPIOValueLevel::HIGH => pin.set_high(),
+                        },
+                    }
+                }
+            }
+        }
+        // TODO: Write analog and pwm
+        GPIOMode::ANALOG => {}
+        GPIOMode::PWM => {}
     }
-    GPIO_LIST
-        .output
-        .write()
-        .unwrap()
-        .entry(gpio.pin)
-        .and_modify(|pin| match gpio.value {
-            0 => pin.set_low(),
-            _ => pin.set_high(),
-        });
+    // GPIO_LIST
+    //     .output
+    //     .write()
+    //     .unwrap()
+    //     .entry(gpio.pin)
+    //     .and_modify(|pin| match gpio.value {
+    //         // 0 => pin.set_low(),
+    //         // _ => pin.set_high(),
+    //     });
 
     // Err(GPIOError::PinNotFound(gpio.pin))
     Ok(())
 }
 
-pub fn read(gpio: RemoteGPIO) -> Result<u32, GPIOError> {
-    if gpio.mode == GPIOMode::OUTPUT {
-        return Err(GPIOError::PinUnmatch(gpio.pin, GPIOMode::INPUT));
-    }
-    if let Some(pin) = GPIO_LIST.input.write().unwrap().get(&gpio.pin) {
-        return Ok(match pin.read() {
-            gpio::Level::Low => 0,
-            gpio::Level::High => 1,
-        });
+pub fn read(gpio: RemoteGPIO) -> Result<GPIOValue, GPIOError> {
+    match gpio.mode {
+        GPIOMode::UNKNOWN | GPIOMode::OUTPUT => return Err(GPIOError::PinUnreadable(gpio.pin)),
+        GPIOMode::INPUT => {
+            if let Ok(list) = GPIO_LIST.input.write() {
+                if let Some(pin) = list.get(&gpio.pin) {
+                    return Ok(match pin.read() {
+                        gpio::Level::Low => GPIOValue::LEVEL(GPIOValueLevel::LOW),
+                        gpio::Level::High => GPIOValue::LEVEL(GPIOValueLevel::HIGH),
+                    });
+                }
+            }
+            return Err(GPIOError::InternalError);
+        }
+        // TODO: Read analog and pwm pin
+        GPIOMode::ANALOG => {}
+        GPIOMode::PWM => {}
     }
     Err(GPIOError::PinNotFound(gpio.pin))
 }
